@@ -39,10 +39,21 @@ async def health():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    """Main chat endpoint — will be replaced with real AI logic in Week 3"""
-    # For now, just echo back
+    llm = get_llm()
+
+    prompt = ChatPromptTemplate.from_messages([
+        ("system", "You are ImmigrationIQ, an AI assistant that provides accurate and up-to-date immigration guidance. Be concise."),
+        ("human", "{message}")
+    ])
+
+    chain  = prompt | llm
+    response = chain.invoke({"message": request.message})
+
+    # LLM response might be a string (Ollama) or AIMessage (Groq)
+    # Handle both:
+    content  = response.content if hasattr(response, 'content') else str(response)
     return ChatResponse(
-        message=f"Echo: {request.message}",
+        message=content,
         session_id=request.session_id
     )
 
