@@ -1,6 +1,7 @@
 from langchain_chroma import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_core.documents import Document
+import atexit
 
 class VectorStoreManager:
     """
@@ -15,47 +16,52 @@ class VectorStoreManager:
     
     # This downloads the model on first run (~80MB), then caches it
     def __init__(self, persist_directory: str = "./chroma_db"):
-        self.persist_directory = persist_directory  # The directory where ChromaDB will store its data
-        
-        print("Loading embedding model...")
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
-        print("✅ Embedding model loaded.")
-
-
-    # Build vector index from documents. Run once, takes a few minutes.
+        self.persist_directory = persist_directory
+        self.embeddings = None  # Lazy load
+        self._vectorstore = None
+        atexit.register(self.cleanup)  # Auto-cleanup
+    
+    def _get_embeddings(self):
+        if self.embeddings is None:
+            print("Loading embeddings...")
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name="sentence-transformers/all-MiniLM-L6-v2",
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True}
+            )
+        return self.embeddings
+    
+    def _get_vectorstore(self):
+        if self._vectorstore is None:
+            self._vectorstore = Chroma(
+                persist_directory=self.persist_directory,
+                embedding_function=self._get_embeddings(),
+                collection_name="uscis_documents"
+            )
+        return self._vectorstore
+    
     def build_index(self, documents: list[Document]) -> Chroma:
         """
         Build vector index from documents. 
         This is the 'indexing phase' of RAG.
         Run once, takes a few minutes.
         """
+         
         print(f"Building vector index from {len(documents)} chunks...")
-
-        vectorStore = Chroma.from_documents(
+        vectorstore = Chroma.from_documents(
             documents=documents,
-            embedding=self.embeddings,
+            embedding=self._get_embeddings(),
             persist_directory=self.persist_directory,
             collection_name="uscis_documents"
         )
-
+        self._vectorstore = vectorstore
         print(f"Index built. Saved to {self.persist_directory}")
-        return vectorStore
+        return vectorstore
     
-    # Load existing index (fast — just connects to ChromaDB, doesn't re-embed)
     def load_index(self) -> Chroma:
-        """Load existing index (fast — just connects to ChromaDB)"""
-        return Chroma(
-            persist_directory=self.persist_directory,
-            embedding_function=self.embeddings,
-            collection_name="uscis_documents"
-        )
-
-
-    def get_retriever(self, k:int =4, form_filter: str = None):
+        return self._get_vectorstore()
+    
+    def get_retriever(self, k: int = 4, form_filter: str = None):
         """
         Get a retriever configured for ImmigrationIQ queries.
         
@@ -64,15 +70,13 @@ class VectorStoreManager:
         
         form_filter: Optional — only search within a specific form's docs (e.g. "I-485") for more targeted retrieval.
         """
-        vectorStore = self.load_index()
-
+        vectorstore = self._get_vectorstore()
         search_kwargs = {"k": k}
-
         if form_filter:
             # Add a filter to only retrieve chunks from the specified form
             search_kwargs["filter"] = {"form_number": form_filter}
         
-        return vectorStore.as_retriever(
+        return vectorstore.as_retriever(
             search_type="mmr",  # Diverse results
             search_kwargs=search_kwargs
         )
@@ -81,11 +85,13 @@ class VectorStoreManager:
         """Direct search + full text (no truncation)."""
         retriever = self.get_retriever(k=k, form_filter=form_filter)
         results = retriever.invoke(query)
-        
-        print(f"\n🔍 Found {len(results)} relevant chunks:")
+        print(f"\n🔍 {len(results)} chunks:")
         for i, doc in enumerate(results, 1):
-            source = doc.metadata.get("source", "Unknown")
-            print(f"\n{i}. [{source}]\n{doc.page_content}")
-            print("-" * 80)
-        
+            print(f"\n{i}. {doc.metadata.get('source', 'Unknown')}")
+            print(f"{doc.page_content[:300]}...")
         return results
+    
+    def cleanup(self):
+        """Clean up embeddings on exit"""
+        self.embeddings = None
+        self._vectorstore = None

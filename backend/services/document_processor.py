@@ -3,6 +3,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from pathlib import Path
 import re
+import gc  # Garbage collector
 
 class USCISDocumentProcessor:
 
@@ -36,47 +37,50 @@ class USCISDocumentProcessor:
         """
         loader = PyPDFLoader(pdf_path)
         pages = loader.load()
+        del loader  # Free memory immediately
+        gc.collect()  # Force garbage collection
 
         chunks = []
         for page in pages:
-            # Clean the text (PDFs often have weird formatting)
-            cleanned_text = self._clean_uscis_text(page.page_content)
-
-            if len(cleanned_text.strip()) < 50: # Skip very short pages (e.g. cover page)
+            cleaned_text = self._clean_uscis_text(page.page_content)
+            if len(cleaned_text.strip()) < 50:
                 continue
-
-            page_chunks =self.text_splitter.create_documents(
-                texts=[cleanned_text],
+            
+            page_chunks = self.text_splitter.create_documents(
+                texts=[cleaned_text],
                 metadatas=[{
                     "form_number": form_number,
-                    "page": page.metadata.get("page",0)+1, # Human-readable page number
-                    "source": f"USCIS Form {form_number} Instructions, Page {page.metadata.get('page',0)+1}",
+                    "page": page.metadata.get("page", 0) + 1,
+                    "source": f"USCIS Form {form_number} Instructions, Page {page.metadata.get('page', 0) + 1}",
                     "pdf_path": pdf_path,
                 }]
             )
             chunks.extend(page_chunks)
-
-        print(f" {form_number}: {len(pages)} pages -> {len(chunks)} chunks")
+            del page_chunks, cleaned_text  # Free page memory
+        
+        del pages  # Free all pages
+        gc.collect()
+        print(f"  {form_number}: {len(chunks)} chunks")
         return chunks
     
     def _clean_uscis_text(self, text: str) -> str:
         """Clean up PDF extraction artifacts"""
         # Remove excessive whitespace
         text = re.sub(r'\n{3,}', '\n\n', text)
-        # Remove page numbers and headers that got extracted
         text = re.sub(r'Form [A-Z]-\d+ Instructions \(\d{2}/\d{2}/\d{2}\)', '', text)
         return text.strip()
     
     def process_all_forms(self, pdf_dir: str = "data/uscis_pdfs") -> list[Document]:
         """Process all downloaded PDFs"""
         all_chunks = []
-        pdf_files = list(Path(pdf_dir).glob("*.pdf")) # Get all PDF files in the directory
-
-        print(f"Processing {len(pdf_files)} USCIS instruction PDFs from {pdf_dir}...")
+        pdf_files = list(Path(pdf_dir).glob("*.pdf"))
+        
+        print(f"Processing {len(pdf_files)} PDFs...")
         for pdf_file in pdf_files:
-            form_number = pdf_file.stem.split("_")[0] # Extract form number from filename, e.g. "I-485_instructions.pdf" -> "I-485"
+            form_number = pdf_file.stem.split("_")[0]
             chunks = self.load_and_chunk(str(pdf_file), form_number)
-            all_chunks.extend(chunks) # Add chunks to the list
-
-        print(f"Total chunks created: {len(all_chunks)}")
+            all_chunks.extend(chunks)
+            gc.collect()  # Free memory after each PDF
+        
+        print(f"Total: {len(all_chunks)} chunks")
         return all_chunks
