@@ -1,5 +1,5 @@
 import os
-from langchain_community import Ollama
+from langchain_community.llms import Ollama
 from langchain_groq import ChatGroq
 from langchain_core.language_models import BaseLanguageModel
 

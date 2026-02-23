@@ -1,2 +1,25 @@
-.env
-requirements.txt
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.venv/
+
+# ChromaDB (local only)
+chroma_db/
+chromadb/
+
+# Data
+data/uscis_pdfs/
+*.pdf
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# OS
+.DS_Store
+Thumbs.db
